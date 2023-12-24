@@ -6,12 +6,12 @@ from mpi4py.futures import MPIPoolExecutor
 
 # Initialize MPI environment
 comm = MPI.COMM_WORLD
-size = 0
-rank= comm.Get_rank()
-
+rank = comm.Get_rank()
+size = comm.Get_size()
 status = MPI.Status()
 
-
+MPI._p_pickle.dumps = dill.dumps
+MPI._p_pickle.loads = dill.loads
 
 # Define data types and constants
 product_shape = (150,)  # Maximum length of product strings after processing
@@ -20,6 +20,7 @@ log_size = 30           # Maximum length of maintenance log entries
 maintenance_tag = 77   # Unique tag for maintenance messages
 threshold = None 
 wear_factors = {}
+print("ANANNANANA")
 # Operations
 def add_operation(products):
     """
@@ -114,14 +115,13 @@ operation_sequence = {
 
 # Parse the input file and extract initial settings
 def parse_input_file(input_file):
-    global size
+
 
     with open(input_file, 'r') as f:
         lines = f.readlines()
 
 
     num_machines = int(lines[0].strip())
-    size = num_machines
     num_cycles = int(lines[1].strip())
     wear_factors_values = list(map(int, lines[2].strip().split()))
     threshold = int(lines[3].strip())
@@ -136,7 +136,7 @@ def parse_input_file(input_file):
     # Parsing the machine operations and parent-child relations
     for line in lines[4:4 + num_machines -1]:
         machine_id, parent_id, operation = line.strip().split()
-        print(machine_id, " ", parent_id)
+
         machine_id, parent_id = int(machine_id), int(parent_id)
         if machine_id not in machines.keys():
             machines[machine_id]={}
@@ -146,7 +146,6 @@ def parse_input_file(input_file):
             machines[machine_id]["parent"] = None
         else:
             machines[machine_id]["operation"]=operation
-        
         if parent_id not in machines.keys():
             machines[parent_id]={}
             machines[parent_id]["children"]=[]
@@ -159,6 +158,11 @@ def parse_input_file(input_file):
             machines[parent_id]["children"].append(machine_id)
             machines[machine_id]["parent"] = parent_id
 
+        # if parent_id not in parent_child_relations:
+        #     parent_child_relations[parent_id] = []
+        # parent_child_relations[parent_id].append(machine_id)
+
+        # machine_operations[machine_id] = operation
 
     # Parsing initial products for leaf machines
 
@@ -169,7 +173,7 @@ def parse_input_file(input_file):
         initialProduct = line.strip()
         machines[leafIDs[index]]["initialProduct"] = initialProduct
 
-    return num_cycles, threshold, wear_factors, dict((sorted(machines.items())))
+    return num_cycles, threshold, wear_factors, dict(sorted(machines.items()))
 
 
 # Calculate the maintenance cost and send the maintenance log to the control room   
@@ -188,68 +192,47 @@ def calculate_maintenance_cost(accumulated_wear, threshold, wear_factor, cycle):
 
 
 # Worker process logic for simulating factory machines
-def machine_process(args):
-
-    rank = args[0]
-    
-    parent=args[1]
-    children=args[2]
-    initial_operation=args[3]
-    wear_factors=args[4]
-    threshold=args[5]
-    num_cycles=args[6]
-    initial_product=args[7]
-
+def machine_process(rank, parent, children, initial_operation, wear_factors, threshold, num_cycles, initial_product):
     accumulated_wear = 0
     global operation_sequence 
-
     operation_sequence = operation_sequence['odd' if rank % 2 else 'even']
-    if initial_operation != 'add':
-        current_operation_index = operation_sequence.index(initial_operation)
+    current_operation_index = operation_sequence.index(initial_operation)
 
     for cycle in range(num_cycles):
-        # Receive products from children or use initial product if it is a leaf machine
+        # Receive products from children or use initial product if a leaf machine
         received_products = {}
-        processed_product = ""
+    
         if children:
             for child in children:
-                
-                product = bytearray(product_shape)
-                print("rank: ",rank, " ", "cycle: ", cycle, " ","child: ", child)                
-                comm.Recv([product,product_dtype], source=child)
-                #received_products[child]=comm.recv(source=child)
-                received_products[child]=product.decode('utf-8')
-                
+                product = np.empty(product_shape, dtype=product_dtype)
+                comm.Recv(product, source=child)
+                received_products[child]=product.tostring().decode('utf-8')
         else:
-            processed_product = initial_product
+            received_products = initial_product
+
 
         # Sort the received_products and send it to add operation
-        if not received_products:
-            received_products=dict(sorted(received_products.items()))
-            processed_product = operations['add'](list(received_products.values()))
+        received_products=dict(sorted(received_products.items()))
+        processed_product = operations['add'](list(received_products.values()))
+
         # the control for the terminal machine--perform the current operation except it is the terminal machine
         if initial_operation != 'add':
             processed_product = operations[initial_operation](processed_product)
             accumulated_wear += wear_factors[initial_operation]
 
-        
-
         # if it's the terminal machine send data to parent or control room.
         if parent is not None:
-            print("rank: ",rank, " ", "cycle: ", cycle, " ","parent: ", parent)
-            # Use blocking send to ensure parent takes the product
-            comm.Send([processed_product.encode('utf-8'),product_dtype],dest=parent)
-            #comm.Send([processed_product.encode('utf-8'),product_dtype],dest=parent)
+            # Use blocking `Send` to ensure parent takes the product
+            comm.Send(np.array(processed_product, dtype=product_dtype), dest=parent)
         else:
-            # For the terminal machine, blocking send the final product to the control room
-            print(parent)
-            comm.Send([processed_product.encode('utf-8'),product_dtype],dest=99)
+            # For the terminal machine, send the final product to the control room
+            comm.Send(np.array(processed_product, dtype=product_dtype), dest=0, tag=99)
 
         # Check for maintenance
         if accumulated_wear >= threshold:
             maintenance_cost = calculate_maintenance_cost(accumulated_wear, threshold, wear_factors[initial_operation])
             maintenance_message = f"{rank}-{maintenance_cost}-{cycle}"
-            # non-blocking send for wear messages
+            # Use non-blocking `Isend` for wear messages
             comm.isend(maintenance_message, dest=0, tag=maintenance_tag)  # Non-blocking send
             accumulated_wear = 0  # Reset wear after maintenance
 
@@ -257,29 +240,36 @@ def machine_process(args):
         current_operation_index = (current_operation_index + 1) % len(operation_sequence)
         initial_operation = operation_sequence[current_operation_index]
 
-    
+    # Handle any remaining incoming maintenance messages
+    while comm.Iprobe(source=MPI.ANY_SOURCE, tag=maintenance_tag):
+        maintenance_log = np.empty(log_size, dtype='S')
+        request = comm.irecv(maintenance_log, source=MPI.ANY_SOURCE, tag=maintenance_tag)
+        request.Wait() # Wait for the non-blocking receive to complete
+        print(f"Machine {rank} received maintenance log: {maintenance_log.tostring().decode('utf-8')}")
 
 
 # Control room logic for distributing initial data and collecting final product and maintenance logs
-def main_control_room(input_file, output_file):
+def main_control_room(input_file, output_file, size):
     # Parse the input file to get initial settings
     num_cycles, threshold, wear_factors, machines = parse_input_file(input_file)
-    global size
-    print(machines)
-    # Initialize a dictionary to store the data to be sent to each machine
-    machine_data = []
 
+
+
+    # Initialize a dictionary to store the data to be sent to each machine
+    machine_data = {}
 
     # Distribute initial data to each machine
-    print(size)
-    for machine_id in range(1,size+1):
-        machine_data.append([machine_id, machines[machine_id]["parent"], machines[machine_id]["children"], machines[machine_id]["operation"], wear_factors, threshold, num_cycles, machines[machine_id]["initialProduct"]])
+    for machine_id in (1,size+1):
+        machine_data[machine_id] = (machines[machine_id]["parent"], machines[machine_id]["children"], machines[machine_id]["operation"], wear_factors, threshold, num_cycles, machines[machine_id]["initialProduct"])
 
-    print(machine_data)
     # Use MPIPoolExecutor for distributing initial data
-    with MPIPoolExecutor (max_workers=size + 1) as executor:        
+    with MPIPoolExecutor(max_workers=size) as executor:
         # Prepare and distribute data to each machine
-        futures = list(executor.map(machine_process, machine_data))
+        futures = []
+        for machine_id, data_to_send in machine_data.items():
+            future = executor.submit(comm.send, data_to_send, dest=machine_id)
+            futures.append(future)
+
         # Ensure all data is sent
         for future in futures:
             future.result()
@@ -289,21 +279,13 @@ def main_control_room(input_file, output_file):
     maintenance_logs = []
 
     # Receive final product and maintenance logs from each machine
-    for _ in range(size):
+    for _ in range(size - 1):
         status = MPI.Status()
         data = comm.recv(source=MPI.ANY_SOURCE, tag=MPI.ANY_TAG, status=status)
         if status.tag == 99:
             final_products.append(data)
         else:
             maintenance_logs.append(data)
-
-    # Handle any remaining incoming maintenance messages
-    while comm.Iprobe(source=MPI.ANY_SOURCE, tag=maintenance_tag):
-        maintenance_log = np.empty(log_size, dtype='S')
-        request = comm.irecv(maintenance_log, source=MPI.ANY_SOURCE, tag=maintenance_tag)
-        request.Wait() # Wait for the non-blocking receive to complete
-        print(f"Machine {rank} received maintenance log: {maintenance_log.tostring().decode('utf-8')}")
-        maintenance_logs.append(maintenance_log)
 
     # Write the final product and maintenance logs to the output file
     with open(output_file, 'w') as f:
@@ -319,7 +301,7 @@ if __name__ == "__main__":
             sys.exit(1)
         # Control room logic
         input_file, output_file = sys.argv[1:3]
-        main_control_room(input_file, output_file)
+        main_control_room(input_file, output_file, size)
     else:
         # Machine logic
         # Receive initial settings (blocking receive)
