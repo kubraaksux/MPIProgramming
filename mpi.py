@@ -1,8 +1,7 @@
 from mpi4py import MPI
-from mpi4py.futures import MPIPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 import sys
 import numpy as np
-
 
 # Initialize MPI environment
 comm = MPI.COMM_WORLD
@@ -17,7 +16,6 @@ log_size = 30           # Maximum length of maintenance log entries
 maintenance_tag = 77   # Unique tag for maintenance messages
 threshold = None 
 wear_factors = {}
-operations = {}
 
 # Operations
 def add_operation(products):
@@ -111,42 +109,6 @@ operation_sequence = {
     'even': ['enhance', 'split', 'chop']  # Even machines alternate between enhance, split, and chop
 }
 
-# Parse the input file and extract initial settings
-def parse_input_file(input_file):
-    with open(input_file, 'r') as f:
-        lines = f.readlines()
-
-    num_machines = int(lines[0].strip())
-    num_cycles = int(lines[1].strip())
-    wear_factors_values = list(map(int, lines[2].strip().split()))
-    threshold = int(lines[3].strip())
-
-    # Initialize the wear factors dictionary for operations
-    operations = ['enhance', 'reverse', 'chop', 'trim', 'split']
-    wear_factors = {op: wear_factors_values[i] for i, op in enumerate(operations)}
-
-    # Initialize dictionaries for parent-child relations and machine operations
-    parent_child_relations = {}
-    machine_operations = {}
-
-    # Parsing the machine operations and parent-child relations
-    for line in lines[4:4 + num_machines]:
-        machine_id, parent_id, operation = line.strip().split()
-        machine_id, parent_id = int(machine_id), int(parent_id)
-
-        if parent_id not in parent_child_relations:
-            parent_child_relations[parent_id] = []
-        parent_child_relations[parent_id].append(machine_id)
-
-        machine_operations[machine_id] = operation
-
-    # Parsing initial products for leaf machines
-    initial_products = {}
-    for line in lines[4 + num_machines:]:
-        machine_id, product = line.strip().split(':')
-        initial_products[int(machine_id)] = product
-
-    return num_cycles, threshold, wear_factors, parent_child_relations, machine_operations, initial_products
 
 
 # Calculate the maintenance cost and send the maintenance log to the control room   
