@@ -128,7 +128,7 @@ def parse_input_file(input_file):
     wear_factors = {op: wear_factors_values[i-1] for i, op in enumerate(operations) if i!=0}
 
     # Initialize dictionaries for parent-child relations and machine operations
-    
+    machines = {}
 
     parent_child_relations = {}
     machine_operations = {}
@@ -138,21 +138,41 @@ def parse_input_file(input_file):
         machine_id, parent_id, operation = line.strip().split()
 
         machine_id, parent_id = int(machine_id), int(parent_id)
-        
+        if machine_id not in machines.keys():
+            machines[machine_id]={}
+            machines[machine_id]["children"]=[]
+            machines[machine_id]["operation"]=operation
+            machines[machine_id]["initialProduct"]=None
+            machines[machine_id]["parent"] = None
+        else:
+            machines[machine_id]["operation"]=operation
+        if parent_id not in machines.keys():
+            machines[parent_id]={}
+            machines[parent_id]["children"]=[]
+            machines[parent_id]["children"].append(machine_id)
+            machines[machine_id]["parent"] = parent_id
+            machines[parent_id]["operation"]='add'
+            machines[parent_id]["initialProduct"]=None
+        else:
+            machines[parent_id]["children"].append(machine_id)
+            machines[machine_id]["parent"] = parent_id
 
-        if parent_id not in parent_child_relations:
-            parent_child_relations[parent_id] = []
-        parent_child_relations[parent_id].append(machine_id)
+        # if parent_id not in parent_child_relations:
+        #     parent_child_relations[parent_id] = []
+        # parent_child_relations[parent_id].append(machine_id)
 
-        machine_operations[machine_id] = operation
+        # machine_operations[machine_id] = operation
 
     # Parsing initial products for leaf machines
-    initial_products = {}
-    for line in lines[4 + num_machines:]:
-        machine_id, product = line.strip().split(':')
-        initial_products[int(machine_id)] = product
 
-    return num_cycles, threshold, wear_factors, parent_child_relations, machine_operations, initial_products
+   
+    leafIDs=[key for key in machines.keys() if not machines[key]["children"]]
+    leafIDs.sort()
+    for index,line in enumerate(lines[4 + num_machines:]):
+        initialProduct = line.strip()
+        machines[leafIDs[index]]["initialProduct"] = initialProduct
+
+    return num_cycles, threshold, wear_factors, dict(sorted(machines.items()))
 
 
 # Calculate the maintenance cost and send the maintenance log to the control room   
@@ -227,21 +247,18 @@ def machine_process(rank, parent, children, initial_operation, wear_factors, thr
 # Control room logic for distributing initial data and collecting final product and maintenance logs
 def main_control_room(input_file, output_file, size):
     # Parse the input file to get initial settings
-    num_cycles, threshold, wear_factors, parent_child_relations, machine_operations, initial_products = parse_input_file(input_file)
+    num_cycles, threshold, wear_factors, machines = parse_input_file(input_file)
 
     print(num_cycles)
+    print(machines)
 
-    return
 
     # Initialize a dictionary to store the data to be sent to each machine
     machine_data = {}
 
     # Distribute initial data to each machine
-    for machine_id in range(1, size):
-        parent, children = parent_child_relations.get(machine_id, (None, []))
-        initial_operation = machine_operations.get(machine_id, 'add')  # Default to 'add' if operation is not specified
-        initial_product = initial_products.get(machine_id, None)
-        machine_data[machine_id] = (parent, children, initial_operation, wear_factors, threshold, num_cycles, initial_product)
+    for machine_id in machines.keys():
+        machine_data[machine_id] = (machines[machine_id]["parent"], machines[machine_id]["children"], machines[machine_id]["operation"], wear_factors, threshold, num_cycles, machines[machine_id]["initialProduct"])
 
     # Use MPIPoolExecutor for distributing initial data
     with MPIPoolExecutor(max_workers=size) as executor:
