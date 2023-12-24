@@ -137,6 +137,7 @@ def parse_input_file(input_file):
     for line in lines[4:4 + num_machines -1]:
         machine_id, parent_id, operation = line.strip().split()
 
+        print(parent_id)
         machine_id, parent_id = int(machine_id), int(parent_id)
         if machine_id not in machines.keys():
             machines[machine_id]={}
@@ -151,6 +152,7 @@ def parse_input_file(input_file):
             machines[parent_id]["children"]=[]
             machines[parent_id]["children"].append(machine_id)
             machines[machine_id]["parent"] = parent_id
+            machines[parent_id]["parent"] = None
             machines[parent_id]["operation"]='add'
             machines[parent_id]["initialProduct"]=None
         else:
