@@ -5,12 +5,10 @@ from mpi4py.futures import MPIPoolExecutor
 
 # Initialize MPI environment
 comm = MPI.COMM_WORLD
-size = 0
+size = comm.Get_size()
 rank= comm.Get_rank()
 
 status = MPI.Status()
-
-
 
 # Define data types and constants
 product_shape = (150,)  # Maximum length of product strings after processing
@@ -21,77 +19,24 @@ threshold = None
 wear_factors = {}
 # Operations
 def add_operation(products):
-    """
-    Concatenate a list of product strings.
-    
-    Args:
-        products (list): List of product strings.
-    
-    Returns:
-        str: Concatenated product string.
-    """
     return ''.join(products)
 
 def enhance_operation(product):
-    """
-    Enhance a product string by adding its first and last characters.
-    
-    Args:
-        product (str): Input product string.
-    
-    Returns:
-        str: Enhanced product string.
-    """
     if len(product) == 0:
         return product
     return product[0] + product + product[-1]
 
 def reverse_operation(product):
-    """
-    Reverse a product string.
-    
-    Args:
-        product (str): Input product string.
-        
-    Returns:
-        str: Reversed product string.
-    """
     return product[::-1]
 
 def chop_operation(product):
-    """
-    Chop off the first and last characters of a product string.
-
-    Args:
-        product (str): Input product string.
-
-    Returns:
-        str: Chopped product string.
-    """
     return product[:-1] if len(product) > 1 else product
 
 def trim_operation(product):
-    """
-    Trim off the first and last characters of a product string.
-    
-    Args:
-        product (str): Input product string.
-
-    Returns:
-        str: Trimmed product string.
-    """
     return product[1:-1] if len(product) > 2 else product
 
 def split_operation(product):
-    """
-    Split a product string into two halves.
 
-    Args:
-        product (str): Input product string.
-    
-    Returns:
-        str: First half of the product string if the length is even, or the first half plus the middle character if the length is odd.
-    """
     mid = len(product) // 2
     return product[:mid] if len(product) % 2 == 0 else product[:mid + 1]
 
@@ -118,7 +63,6 @@ def parse_input_file(input_file):
     with open(input_file, 'r') as f:
         lines = f.readlines()
 
-
     num_machines = int(lines[0].strip())
     size = num_machines
     num_cycles = int(lines[1].strip())
@@ -130,7 +74,6 @@ def parse_input_file(input_file):
 
     # Initialize dictionaries for parent-child relations and machine operations
     machines = {}
-
 
     # Parsing the machine operations and parent-child relations
     for line in lines[4:4 + num_machines -1]:
@@ -158,10 +101,8 @@ def parse_input_file(input_file):
             machines[parent_id]["children"].append(machine_id)
             machines[machine_id]["parent"] = parent_id
 
-
     # Parsing initial products for leaf machines
 
-   
     leafIDs=[key for key in machines.keys() if not machines[key]["children"]]
     leafIDs.sort()
     for index,line in enumerate(lines[4 + num_machines:]):
@@ -169,6 +110,19 @@ def parse_input_file(input_file):
         machines[leafIDs[index]]["initialProduct"] = initialProduct
 
     return num_cycles, threshold, wear_factors, dict((sorted(machines.items())))
+
+def test_parse_input_file():
+    expected_output = {
+        'num_machines': 7,
+        'num_cycles': 10,
+        'wear_factors': {...},  # fill in expected wear factors
+        'machines': {...},      # fill in expected machine details
+    }
+
+    actual_output = parse_input_file('input.txt')
+    assert actual_output == expected_output, "Parsed output does not match expected output"
+
+test_parse_input_file()
 
 
 # Calculate the maintenance cost and send the maintenance log to the control room   
